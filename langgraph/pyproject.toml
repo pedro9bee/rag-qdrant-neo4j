@@ -1,0 +1,53 @@
+[project]
+name = "langgraph-rag"
+version = "0.1.0"
+description = "RAG + Knowledge Graph Pipeline with LangGraph, Ollama, Qdrant, and Neo4j"
+requires-python = ">=3.10"
+dependencies = [
+    # LangChain Core
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.20",
+    "langchain-core>=0.1.0",
+    "langchain-text-splitters>=0.0.1",
+    "langgraph>=0.0.40",
+    
+    # Ollama Integration
+    "langchain-ollama>=0.1.0",
+    
+    # NER and NLP
+    "spacy>=3.7.0",
+    
+    # Vector Store
+    "qdrant-client>=1.7.0",
+    
+    # Graph Database
+    "neo4j>=5.15.0",
+    
+    # Object Storage (S3/MinIO)
+    "boto3>=1.34.0",
+    
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "typing-extensions>=4.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+

@@ -1,0 +1,151 @@
+id: ingest_rag
+namespace: ai.rag
+
+description: |
+  RAG Document Ingestion Flow
+  
+  This flow:
+  1. Scans MinIO bucket for text/markdown documents
+  2. Downloads and chunks documents
+  3. Generates embeddings using configured provider
+  4. Stores vectors in Qdrant
+  5. Extracts entities and relationships using LLM
+  6. Populates Neo4J knowledge graph
+
+inputs:
+  - id: minio_bucket
+    type: STRING
+    defaults: "rag-documents"
+    description: MinIO bucket containing documents
+  
+  - id: minio_path
+    type: STRING
+    defaults: "documents/"
+    description: Path prefix in bucket to scan
+
+tasks:
+  - id: ingest_documents
+    type: io.kestra.plugin.scripts.python.Script
+    description: Execute LangGraph ingestion workflow
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      networkMode: kestra-network
+      volumes:
+        - /opt/contabo/langgraph:/app/langgraph:ro
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --no-cache-dir boto3 qdrant-client neo4j langchain langchain-community langchain-text-splitters langchain-openai spacy tiktoken
+      - python -m spacy download en_core_web_sm
+    env:
+      # MinIO Configuration
+      MINIO_ENDPOINT: "{{ envs.MINIO_ENDPOINT }}"
+      MINIO_ACCESS_KEY: "{{ envs.MINIO_ACCESS_KEY }}"
+      MINIO_SECRET_KEY: "{{ envs.MINIO_SECRET_KEY }}"
+      MINIO_RAG_BUCKET: "{{ inputs.minio_bucket }}"
+      MINIO_RAG_PATH: "{{ inputs.minio_path }}"
+      
+      # Qdrant Configuration
+      QDRANT_URL: "{{ envs.QDRANT_URL }}"
+      QDRANT_COLLECTION_NAME: "{{ envs.QDRANT_COLLECTION_NAME }}"
+      
+      # Neo4J Configuration
+      NEO4J_URI: "{{ envs.NEO4J_URI }}"
+      NEO4J_USER: "{{ envs.NEO4J_USER }}"
+      NEO4J_PASSWORD: "{{ envs.NEO4J_PASSWORD }}"
+      
+      # OpenAI Configuration
+      OPENAI_API_KEY: "{{ envs.OPENAI_API_KEY }}"
+      EMBEDDING_MODEL: "{{ envs.EMBEDDING_MODEL }}"
+      LLM_MODEL: "{{ envs.LLM_MODEL }}"
+      EMBEDDING_DIMENSIONS: "{{ envs.EMBEDDING_DIMENSIONS }}"
+      
+      # Entity & Relationship Lists (Knowledge Graph)
+      ENTITIES_LIST: "{{ envs.ENTITIES_LIST }}"
+      RELATIONSHIPS_LIST: "{{ envs.RELATIONSHIPS_LIST }}"
+      
+      # Chunking Configuration
+      CHUNK_SIZE: "{{ envs.CHUNK_SIZE }}"
+      CHUNK_OVERLAP: "{{ envs.CHUNK_OVERLAP }}"
+    
+    script: |
+      import sys
+      import os
+      import logging
+      
+      # Configure logging
+      logging.basicConfig(
+          level=logging.INFO,
+          format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+      )
+      logger = logging.getLogger(__name__)
+      
+      # Add langgraph to path
+      sys.path.insert(0, '/app/langgraph')
+      
+      try:
+          from graphs.ingest_graph import build_ingest_graph
+          from graphs.shared import IngestState
+          
+          logger.info("Building ingestion workflow...")
+          graph = build_ingest_graph()
+          
+          # Initialize state
+          initial_state = IngestState(
+              minio_bucket=os.getenv("MINIO_RAG_BUCKET", "rag-documents"),
+              minio_path=os.getenv("MINIO_RAG_PATH", "documents/"),
+              documents=[],
+              current_document=None,
+              document_content=None,
+              chunks=[],
+              embeddings=[],
+              entities=[],
+              relationships=[],
+              processed_count=0,
+              error=None
+          )
+          
+          logger.info("Starting document ingestion...")
+          logger.info(f"Bucket: {initial_state['minio_bucket']}")
+          logger.info(f"Path: {initial_state['minio_path']}")
+          
+          # Execute workflow
+          final_state = graph.invoke(initial_state)
+          
+          # Check for errors
+          if final_state.get("error"):
+              logger.error(f"Ingestion failed: {final_state['error']}")
+              sys.exit(1)
+          
+          # Output results
+          processed = final_state.get("processed_count", 0)
+          total = len(final_state.get("documents", []))
+          
+          logger.info("=" * 60)
+          logger.info("INGESTION COMPLETED")
+          logger.info("=" * 60)
+          logger.info(f"Documents processed: {processed}/{total}")
+          logger.info(f"Total chunks created: {sum(len(final_state.get('chunks', [])) for _ in range(processed))}")
+          logger.info(f"Entities extracted: {len(final_state.get('entities', []))}")
+          logger.info(f"Relationships created: {len(final_state.get('relationships', []))}")
+          logger.info("=" * 60)
+          
+          print(f"::{{set-output name=processed_count::{processed}}}")
+          print(f"::{{set-output name=total_documents::{total}}}")
+          
+      except Exception as e:
+          logger.error(f"Workflow execution failed: {e}", exc_info=True)
+          sys.exit(1)
+
+outputs:
+  - id: processed_count
+    type: INT
+    value: "{{ outputs.ingest_documents.vars.processed_count }}"
+  
+  - id: total_documents
+    type: INT
+    value: "{{ outputs.ingest_documents.vars.total_documents }}"
+  
+  - id: status
+    type: STRING
+    value: "completed"
+

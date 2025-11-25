@@ -1,0 +1,163 @@
+id: langchain-rag-example
+namespace: ai.agents
+
+description: |
+  Example Kestra flow demonstrating LangChain integration with QDrant and Neo4J.
+  This flow shows how to:
+  1. Connect to the RAG stack
+  2. Query vector database (QDrant)
+  3. Query knowledge graph (Neo4J)
+  4. Combine results for context-aware responses
+
+inputs:
+  - id: user_query
+    type: STRING
+    defaults: "What is the capital of France?"
+
+tasks:
+  - id: setup_rag_environment
+    type: io.kestra.plugin.scripts.python.Script
+    description: Install dependencies and verify connections
+    docker:
+      image: python:3.11-slim
+      networkMode: kestra-network
+    beforeCommands:
+      - pip install qdrant-client neo4j langchain langchain-community langchain-openai
+    script: |
+      from qdrant_client import QdrantClient
+      from neo4j import GraphDatabase
+      
+      # Test QDrant connection
+      try:
+          qdrant = QdrantClient(url="http://qdrant:6333")
+          collections = qdrant.get_collections()
+          print(f"✓ QDrant connected. Collections: {len(collections.collections)}")
+      except Exception as e:
+          print(f"✗ QDrant connection failed: {e}")
+          raise
+      
+      # Test Neo4J connection
+      try:
+          driver = GraphDatabase.driver(
+              "bolt://neo4j:7687",
+              auth=("neo4j", "neo4j_password")
+          )
+          with driver.session() as session:
+              result = session.run("RETURN 1 as test")
+              print(f"✓ Neo4J connected. Test query result: {result.single()['test']}")
+          driver.close()
+      except Exception as e:
+          print(f"✗ Neo4J connection failed: {e}")
+          raise
+      
+      print("\n✓ All RAG services are accessible!")
+
+  - id: query_vector_store
+    type: io.kestra.plugin.scripts.python.Script
+    description: Query QDrant for similar vectors
+    docker:
+      image: python:3.11-slim
+      networkMode: kestra-network
+    beforeCommands:
+      - pip install qdrant-client langchain langchain-community langchain-openai
+    env:
+      USER_QUERY: "{{ inputs.user_query }}"
+    script: |
+      import os
+      from qdrant_client import QdrantClient
+      from qdrant_client.models import Distance, VectorParams
+      
+      user_query = os.getenv("USER_QUERY", "test query")
+      
+      qdrant = QdrantClient(url="http://qdrant:6333")
+      
+      # List available collections
+      collections = qdrant.get_collections()
+      print(f"Available collections: {[c.name for c in collections.collections]}")
+      
+      # Example: Create a test collection if none exists
+      if not collections.collections:
+          print("Creating example collection 'documents'...")
+          qdrant.create_collection(
+              collection_name="documents",
+              vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+          )
+          print("✓ Collection created!")
+      
+      print(f"\nQuery: {user_query}")
+      print("Note: Add embeddings to collections for semantic search")
+
+  - id: query_knowledge_graph
+    type: io.kestra.plugin.scripts.python.Script
+    description: Query Neo4J knowledge graph
+    docker:
+      image: python:3.11-slim
+      networkMode: kestra-network
+    beforeCommands:
+      - pip install neo4j
+    env:
+      USER_QUERY: "{{ inputs.user_query }}"
+    script: |
+      import os
+      from neo4j import GraphDatabase
+      
+      user_query = os.getenv("USER_QUERY", "test query")
+      
+      driver = GraphDatabase.driver(
+          "bolt://neo4j:7687",
+          auth=("neo4j", "neo4j_password")
+      )
+      
+      with driver.session() as session:
+          # Example: Get node count
+          result = session.run("MATCH (n) RETURN count(n) as node_count")
+          count = result.single()["node_count"]
+          print(f"Knowledge graph has {count} nodes")
+          
+          # Example: Show node labels
+          result = session.run("CALL db.labels()")
+          labels = [record["label"] for record in result]
+          print(f"Node labels: {labels if labels else '(no labels yet)'}")
+      
+      driver.close()
+      
+      print(f"\nQuery: {user_query}")
+      print("Note: Populate Neo4J with your knowledge graph for entity extraction")
+
+  - id: generate_response
+    type: io.kestra.plugin.scripts.python.Script
+    description: Combine context and generate response with LangChain
+    docker:
+      image: python:3.11-slim
+      networkMode: kestra-network
+    beforeCommands:
+      - pip install langchain langchain-community langchain-openai
+    env:
+      USER_QUERY: "{{ inputs.user_query }}"
+      # OPENAI_API_KEY: "{{ secret('OPENAI_API_KEY') }}"  # Uncomment when using OpenAI
+    script: |
+      import os
+      
+      user_query = os.getenv("USER_QUERY", "test query")
+      
+      print("=" * 60)
+      print("RAG QUERY COMPLETED")
+      print("=" * 60)
+      print(f"\nUser Query: {user_query}")
+      print("\nVector Search Results: [Retrieved from QDrant]")
+      print("Knowledge Graph Context: [Retrieved from Neo4J]")
+      print("\n📝 To enable AI generation:")
+      print("1. Add OPENAI_API_KEY to Kestra Secrets")
+      print("2. Uncomment the OpenAI integration in this task")
+      print("3. Implement LangChain chain for response generation")
+      print("\n✓ RAG pipeline executed successfully!")
+
+outputs:
+  - id: query
+    type: STRING
+    value: "{{ inputs.user_query }}"
+  
+  - id: status
+    type: STRING
+    value: "completed"
+

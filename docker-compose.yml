@@ -1,0 +1,132 @@
+services:
+  # MinIO - S3 Compatible Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "0.0.0.0:9002:9000"  # API (changed to avoid conflict)
+      - "0.0.0.0:9003:9001"  # Console (changed to avoid conflict)
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Neo4J - Graph Database for Knowledge Graph
+  neo4j:
+    image: neo4j:5-community
+    container_name: neo4j
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_password
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_apoc_import_file_use__neo4j__config: "true"
+    ports:
+      - "0.0.0.0:7474:7474"  # HTTP
+      - "0.0.0.0:7687:7687"  # Bolt
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  # Redis - Cache for YouTube Search Results
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "0.0.0.0:6379:6379"
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # QDrant - Vector Database for RAG
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    ports:
+      - "0.0.0.0:6333:6333"  # HTTP API
+      - "0.0.0.0:6334:6334"  # gRPC
+    networks:
+      - rag-network
+    # Healthcheck disabled: wget/curl not available in qdrant image
+    # Service is accessible on port 6333 and responds correctly
+    restart: unless-stopped
+  # Open WebUI - AI Chat Interface
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    environment:
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      # Multiple OpenAI-compatible endpoints:
+      # - Port 8000: RAG API (AIjudante - returns "banana")
+      # - Port 8001: LangGraph Chat API (full RAG workflow)
+      OPENAI_API_BASE_URLS: "http://host.docker.internal:8000/v1;http://host.docker.internal:8001/v1"
+      OPENAI_API_KEY: "sk-dummy-key"
+    ports:
+      - "0.0.0.0:3000:8080"
+    volumes:
+      - open_webui_data:/app/backend/data
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+networks:
+  rag-network:
+    driver: bridge
+    name: rag-network
+
+volumes:
+  minio_data:
+    name: minio_data
+  redis_data:
+    name: redis_data
+  neo4j_data:
+    name: neo4j_data
+  neo4j_logs:
+    name: neo4j_logs
+  neo4j_import:
+    name: neo4j_import
+  neo4j_plugins:
+    name: neo4j_plugins
+  qdrant_storage:
+    name: qdrant_storage
+  ollama_data:
+    name: ollama_data
+  open_webui_data:
+    name: open_webui_data
